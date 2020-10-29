@@ -45,6 +45,10 @@ func StartHTTPTokenBucket() {
 	}
 }
 
+type DialerContext interface {
+	DialContext(ctx context.Context, network, address string) (net.Conn, error)
+}
+
 // A net.Conn that sets a deadline for every Read or Write operation
 type timeoutConn struct {
 	net.Conn
@@ -111,7 +115,7 @@ func ResetTransport() {
 // NewTransportCustom returns an http.RoundTripper with the correct timeouts.
 // The customize function is called if set to give the caller an opportunity to
 // customize any defaults in the Transport.
-func NewTransportCustom(ci *fs.ConfigInfo, customize func(*http.Transport)) http.RoundTripper {
+func NewTransportProxy(ci *fs.ConfigInfo, customize func(*http.Transport), proxyUrl string) http.RoundTripper {
 	// Start with a sensible set of defaults then override.
 	// This also means we get new stuff when it gets added to go
 	t := new(http.Transport)
@@ -154,9 +158,24 @@ func NewTransportCustom(ci *fs.ConfigInfo, customize func(*http.Transport)) http
 		t.TLSClientConfig.RootCAs = caCertPool
 	}
 
+	if ci.RootCAs != nil {
+		t.TLSClientConfig.RootCAs = ci.RootCAs
+	}
+
 	t.DisableCompression = ci.NoGzip
-	t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		return dialContextTimeout(ctx, network, addr, ci)
+	if proxyUrl == "" {
+		t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialContextTimeout(ctx, network, addr, ci)
+		}
+	} else {
+		proxyDialer := ci.DialerCreator.RcloneDialer(proxyUrl)
+		t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			c, err := proxyDialer(ctx, network, addr)
+			if err != nil {
+				return c, err
+			}
+			return newTimeoutConn(c, ci.Timeout)
+		}
 	}
 	t.IdleConnTimeout = 60 * time.Second
 	t.ExpectContinueTimeout = ci.ExpectContinueTimeout
@@ -177,12 +196,30 @@ func NewTransportCustom(ci *fs.ConfigInfo, customize func(*http.Transport)) http
 	return newTransport(ci, t)
 }
 
+func NewTransportCustom(ci *fs.ConfigInfo, customize func(*http.Transport)) http.RoundTripper {
+	return NewTransportProxy(ci, customize, "")
+}
+
 // NewTransport returns an http.RoundTripper with the correct timeouts
 func NewTransport(ci *fs.ConfigInfo) http.RoundTripper {
 	(*noTransport).Do(func() {
 		transport = NewTransportCustom(ci, nil)
 	})
 	return transport
+}
+
+func NewClientProxy(ci *fs.ConfigInfo, proxy string) *http.Client {
+	if proxy == "" {
+		return NewClient(ci)
+	} else {
+		client := &http.Client{
+			Transport: NewTransportProxy(ci, nil, proxy),
+		}
+		if ci.Cookie {
+			client.Jar = cookieJar
+		}
+		return client
+	}
 }
 
 // NewClient returns an http.Client with the correct timeouts
@@ -355,7 +392,7 @@ func (t *Transport) RoundTrip(req *http.Request) (resp *http.Response, err error
 
 // NewDialer creates a net.Dialer structure with Timeout, Keepalive
 // and LocalAddr set from rclone flags.
-func NewDialer(ci *fs.ConfigInfo) *net.Dialer {
+func NewDialer(ci *fs.ConfigInfo) DialerContext {
 	dialer := &net.Dialer{
 		Timeout:   ci.ConnectTimeout,
 		KeepAlive: 30 * time.Second,

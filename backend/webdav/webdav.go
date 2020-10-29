@@ -83,6 +83,9 @@ func init() {
 			Name: "bearer_token",
 			Help: "Bearer token instead of user/pass (eg a Macaroon)",
 		}, {
+			Name: "proxy",
+			Help: "proxy to remote url",
+		}, {
 			Name:     "bearer_token_command",
 			Help:     "Command to run to get a bearer token",
 			Advanced: true,
@@ -98,6 +101,7 @@ type Options struct {
 	Pass               string `config:"pass"`
 	BearerToken        string `config:"bearer_token"`
 	BearerTokenCommand string `config:"bearer_token_command"`
+	Proxy              string `config:"proxy"`
 }
 
 // Fs represents a remote webdav
@@ -337,7 +341,7 @@ func NewFs(name, root string, m configmap.Mapper) (fs.Fs, error) {
 		opt:         *opt,
 		endpoint:    u,
 		endpointURL: u.String(),
-		srv:         rest.NewClient(fshttp.NewClient(fs.Config)).SetRoot(u.String()),
+		srv:         rest.NewClient(fshttp.NewClientProxy(fs.Config, opt.Proxy)).SetRoot(u.String()),
 		pacer:       fs.NewPacer(pacer.NewDefault(pacer.MinSleep(minSleep), pacer.MaxSleep(maxSleep), pacer.DecayConstant(decayConstant))),
 		precision:   fs.ModTimeNotSupported,
 	}

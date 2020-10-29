@@ -1,6 +1,8 @@
 package fs
 
 import (
+	"context"
+	"crypto/x509"
 	"net"
 	"strings"
 	"time"
@@ -37,6 +39,10 @@ var (
 	// ConfigProvider is the config key used for provider options
 	ConfigProvider = "provider"
 )
+
+type DialerCreator interface {
+	RcloneDialer(proxyUrl string) func(ctx context.Context, network, address string) (net.Conn, error)
+}
 
 // ConfigInfo is filesystem config options
 type ConfigInfo struct {
@@ -119,6 +125,9 @@ type ConfigInfo struct {
 	DownloadHeaders        []*HTTPOption
 	Headers                []*HTTPOption
 	RefreshTimes           bool
+
+	RootCAs       *x509.CertPool
+	DialerCreator DialerCreator
 }
 
 // NewConfig creates a new config with everything set to the default
